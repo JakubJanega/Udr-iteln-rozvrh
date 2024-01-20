@@ -1,0 +1,138 @@
+install.packages("openxlsx")
+library(openxlsx)
+library(readxl)
+library(dplyr)
+
+
+Zakladni_data <- read_excel("Agregovaný dataset - SKRIPT - UTERY.xlsx")
+
+#######################################################################
+#Rekódování######################
+
+#Budova + Místnost
+Zakladni_data$Budova_Mistnost <- paste(Zakladni_data$budova,Zakladni_data$mistnost)
+
+#######################################################################
+#Dataset místností######################
+Dataset_mistnosti <- Zakladni_data %>% distinct(Budova_Mistnost)
+
+# Načtení datasetů
+unikatni_budovy_mistnosti <- Zakladni_data %>%
+  distinct(Budova_Mistnost) %>%
+  mutate(`SLOT 1` = 0, `SLOT 2` = 0, `SLOT 3` = 0,
+         `SLOT 4` = 0,`SLOT 5` = 0,`SLOT 6` = 0,
+         `SLOT 7` = 0,`SLOT 8` = 0,`SLOT 9` = 0,
+         `SLOT 10` = 0,`SLOT 11` = 0,`SLOT 12` = 0,
+         `SLOT 13` = 0,`SLOT 14` = 0,`SLOT 15` = 0,
+         `SLOT 16` = 0,`SLOT 17` = 0)
+
+
+# Definování časových slotů
+start_hodin <- 1 # Předpokládáme, že SLOT 1 začíná v 0 hodin
+sloty <- setNames(lapply(1:17, function(x) c(start_hodin + x - 1, start_hodin + x - 1)), paste0("SLOT ", 1:17))
+
+# Funkce pro přiřazení slotů
+prirad_slot <- function(hodinaOd, hodinaDo) {
+  slots <- numeric(17)
+  for (i in 1:17) {
+    if (hodinaOd <= sloty[[i]][1] && hodinaDo >= sloty[[i]][2]) {
+      slots[i] <- 1
+    } else {
+      slots[i] <- 0
+    }
+  }
+  return(slots)
+}
+
+for (i in 1:nrow(Zakladni_data)) {
+  row <- Zakladni_data[i, ]
+  slots <- prirad_slot(row$hodinaOd, row$hodinaDo)
+  
+  unikatni_budovy_mistnosti_index <- which(unikatni_budovy_mistnosti$Budova_Mistnost == row$Budova_Mistnost)
+  if (length(unikatni_budovy_mistnosti_index) > 0) {
+    for (j in 2:18) {
+      current_value <- as.numeric(unikatni_budovy_mistnosti[unikatni_budovy_mistnosti_index, j])
+      slot_value <- as.numeric(slots[j - 1])
+      unikatni_budovy_mistnosti[unikatni_budovy_mistnosti_index, j] <- max(slot_value, current_value, na.rm = TRUE)
+    }
+  }
+}
+
+
+# Zobrazení aktualizovaného datasetu
+print(unikatni_budovy_mistnosti)
+rozvrh <- unikatni_budovy_mistnosti
+
+#######################################################################
+# Napojení kapacity místností a součet vytížení místností
+
+ROZVRH <- rozvrh %>%
+  mutate(sum_of_rows = rowSums(select(., -1)))  # Vynechání prvního sloupce
+print(ROZVRH)
+
+#######################################################################
+
+unikatni_budovy_mistnosti2 <- Zakladni_data %>%
+  distinct(kapacitaMistnosti,Budova_Mistnost) 
+
+ROZVRH_FINAL <- merge(ROZVRH,unikatni_budovy_mistnosti2,by="Budova_Mistnost")
+
+#######################################################################
+#Export dataframu do excelu######################################################################
+
+# Název Excel souboru, kam chcete data exportovat
+datakexportu <- "ROZVRH_FINAL.xlsx"
+write.xlsx(ROZVRH_FINAL, datakexportu)
+#######################################################################
+
+# Načtení dat
+rozvrh_data <- read_excel("ROZVRH_FINAL.xlsx")
+
+# Přejmenování proměnné
+colnames(rozvrh_data)[19] ="VytizeniMistnosti"
+
+# Inicializace prázdného data frame pro sledování přesunů
+presuny <- data.frame(
+  Z_Mistnosti = character(),
+  Do_Mistnosti = character(),
+  Slot = character(),
+  stringsAsFactors = FALSE
+)
+
+# Logika pro přesun výuky
+for (i in 1:nrow(rozvrh_data)) {
+  for (slot in grep("SLOT", names(rozvrh_data))) {
+    if (!is.na(rozvrh_data[i, slot]) && rozvrh_data[i, slot] == 0) {  # Pokud je slot volný a není NA
+      # Najdeme místnost s nižší kapacitou a nižším vytížením, která má tento slot obsazený
+      for (j in (i + 1):nrow(rozvrh_data)) {
+        if (!is.na(rozvrh_data[j, slot]) && 
+            !is.na(rozvrh_data[j, "kapacitaMistnosti"]) && 
+            rozvrh_data[j, slot] == 1 && 
+            rozvrh_data[j, "kapacitaMistnosti"] < rozvrh_data[i, "kapacitaMistnosti"] &&
+            !is.na(rozvrh_data[j, "VytizeniMistnosti"]) && 
+            rozvrh_data[j, "VytizeniMistnosti"] < rozvrh_data[i, "VytizeniMistnosti"]) {
+          # Provedeme přesun
+          rozvrh_data[i, slot] <- 1
+          rozvrh_data[j, slot] <- 2
+          
+          # Zaznamenáme přesun
+          presuny <- rbind(presuny, data.frame(
+            Z_Mistnosti = rozvrh_data[j, "Budova_Mistnost"],
+            Do_Mistnosti = rozvrh_data[i, "Budova_Mistnost"],
+            Slot = names(rozvrh_data)[slot]
+          ))
+          
+          break  # Přesun proveden, jdeme na další slot
+        }
+      }
+    }
+  }
+}
+
+# Výsledek
+print(rozvrh_data)
+print(presuny)
+
+# Název Excel souboru, kam chcete data exportovat
+datakexportu_presuny <- "PRESUNY_FINAL.xlsx"
+write.xlsx(presuny, datakexportu_presuny)
